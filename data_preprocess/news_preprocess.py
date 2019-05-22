@@ -6,11 +6,26 @@ import pandas as pd
 import numpy as np
 from gensim.models import Word2Vec
 
-# 加载数据
-file_path = '/home/ingrid/Data/stockpredict/'
-news_file_name = 'TRAINSET_NEWS.csv'
+import sys
+sys.path.append('../')
+from cfg import file_path, news_file_name
 
-news_data = pd.read_csv(file_path + news_file_name, header=0)
+
+# super params
+em_size = 200
+
+# 加载数据
+news_data = pd.read_csv(file_path + news_file_name, header = 0)
+# print(news_data.columns)
+#
+# # 补充数据为空的数据
+# dt = pd.date_range('20140414', '20190401')
+# for date in dt:
+#     date_str = date.strftime('%Y%m%d')
+#     null_row = pd.DataFrame([0, date_str, 0, 0], columns = news_data.coulmns)
+#     if date_str not in news_data['date']:
+#         news_data = pd.concat([news_data, null_row], axis=0)
+# news_data.sort_values(by = 'date')
 
 
 
@@ -62,8 +77,8 @@ news_data['clean_seg'] = news_data['clean_seg'].apply(lambda sen: ' '.join(x for
 
 
 # word2vec词向量表示文本
-def sen_vec(sen_seg, train_w2c):
-    vec = np.zeros(500)
+def sen_vec(sen_seg, train_w2v):
+    vec = np.zeros(em_size)
     count = 0
     for word in sen_seg.split():
         try:
@@ -73,11 +88,20 @@ def sen_vec(sen_seg, train_w2c):
             pass
     return vec/count
 
-train_w2v = Word2Vec(news_data['clean_seg'], min_count = 5, size = 500, workers = 4)   # 词频少于min_count次数的单词会被丢弃掉, size指特征向量的维度为50, workers参数控制训练的并行数;
+train_w2v = Word2Vec(news_data['clean_seg'], min_count = 5, size = em_size, workers = 4)   # 词频少于min_count次数的单词会被丢弃掉, size指特征向量的维度为200, workers参数控制训练的并行数;
 news_data['word2vec'] = news_data['clean_seg'].apply(lambda sen_seg: sen_vec(sen_seg, train_w2v))
 
+# 只保留所需要的列
+news_data.drop(['id', 'title',  'content', 'sen_seg', 'clean_seg'], axis = 1, inplace=True)
+
+# 将数据按日期升序排列
+news_data.sort_values(by = 'date', ascending=True, inplace = True)
+
+print(news_data.head(10))
 # 数据存储
 save_news_name = 'processed_TRAINSET_NEWS.csv'
-news_data.to_csv(file_path + save_news_name, sep = ',', header = True, index = False)
+news_data.to_csv(file_path + save_news_name, sep=',', index = False)
+
+print("Success to preprocess news data!")
 
 
