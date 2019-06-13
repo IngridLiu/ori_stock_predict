@@ -8,16 +8,16 @@ from gensim.models import Word2Vec
 
 import sys
 sys.path.append('../')
-from cfg import file_path, news_file_name
+from cfg import data_root, news_file_name
 
 
 # super params
 em_size = 200
 
 # 加载数据
-news_data = pd.read_csv(file_path + news_file_name, header = 0)
+news_data = pd.read_csv(data_root + news_file_name, header = 0)
 # print(news_data.columns)
-#
+
 # # 补充数据为空的数据
 # dt = pd.date_range('20140414', '20190401')
 # for date in dt:
@@ -58,8 +58,8 @@ def drop_stopwords(sen_seg, stopwords):
     return ' '.join(sen_clean)
 
 stopwords_file_name = 'hagongda_stopwords.txt'
-stopwords_file_path = file_path + stopwords_file_name
-stopwords_file = open(stopwords_file_path)
+stopwords_data_root = data_root + stopwords_file_name
+stopwords_file = open(stopwords_data_root)
 stopwords = stopwords_file.readlines()
 news_data['clean_seg'] = news_data['sen_seg'].apply(lambda sen_seg:drop_stopwords(sen_seg, stopwords))
 
@@ -97,10 +97,13 @@ news_data.drop(['id', 'title',  'content', 'sen_seg', 'clean_seg'], axis = 1, in
 # 将数据按日期升序排列
 news_data.sort_values(by = 'date', ascending=True, inplace = True)
 
-print(news_data.head(10))
 # 数据存储
-save_news_name = 'processed_TRAINSET_NEWS.csv'
-news_data.to_csv(file_path + save_news_name, sep=',', index = False)
+processed_news_file = 'processed_TRAINSET_NEWS.csv'
+news_data.to_csv(data_root + processed_news_file, sep=',', index = False)
+
+# 数据存储供直接使用
+saved_news_file = 'input_TRAINSET_NEWS.csv'
+news_data.to_csv(data_root + saved_news_file, sep=',', index = False, header=False)
 
 print("Success to preprocess news data!")
 
