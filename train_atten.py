@@ -1,5 +1,6 @@
 import argparse
 import time
+import numpy as np
 import torch.nn as nn
 
 from cfg import *
@@ -22,16 +23,16 @@ parser.add_argument('--train_ratio', type = float, default='0.6', help='the rati
 parser.add_argument('--eval_ratio', type = float, default='0.2', help='the ratio of eval set of whole data.')
 
 parser.add_argument('--model', type=str, default='basic_model', help='the model to train')
-#parser.add_argument('--model', type=str, default='LSTM', help='type of recurrent net (RNN_TANH, RNN_RELU, LSTM, GRU)')
-parser.add_argument('--emsize', type=int, default=200, help='size of word embeddings')
+parser.add_argument('--nclass', type=int, default=2, help='the number of class to predict.')
+parser.add_argument('--emb_size', type=int, default=200, help='size of word embeddings')
 parser.add_argument('--N', type=int, default=20, help='the size of input days')
 parser.add_argument('--nhid', type=int, default=300, help='number of hidden units per layer')
 parser.add_argument('--nlayers', type=int, default=1, help='number of layers')
-# parser.add_argument('--r', type=int, default=30, help='r in paper, # of keywords you want to focus on')
-# parser.add_argument('--mlp_nhid', type=int, default=300, help='r in paper, # of keywords you want to focus on')
-# parser.add_argument('--da', type=int, default=350, help='da in paper' )
-# parser.add_argument('--lamb', type=float, default=1, help='penalization term coefficient')
+parser.add_argument('--na', type=int, default=200, help='the length of news attention vector.' )
+parser.add_argument('--da', type=int, default=350, help='da in paper' )
+parser.add_argument('--head', type=float, default=1, help='the number of head in model.')
 parser.add_argument('--lr', type=float, default=0.001, help='initial learning rate')
+parser.add_argument('--lamb', type=float, default=1, help='penalization term coefficient')
 parser.add_argument('--momentum', type=float, default=0.9, help='sgd with momentum')
 parser.add_argument('--weight_decay', type=float, default=0.0001, help='weight_decay')
 parser.add_argument('--clip', type=float, default=0.5, help='gradient clipping')
@@ -40,9 +41,9 @@ parser.add_argument('--batch_size', type=int, default=2, metavar='N', help='batc
 parser.add_argument('--eval_size', type=int, default=32, metavar='N', help='evaluation batch size')
 parser.add_argument('--seed', type=int, default=1111, help='random seed')
 parser.add_argument('--pretrained', type=str, default='', help='whether start from pretrained model')
-parser.add_argument('--cuda', default=False, action='store_true', help='use CUDA')
-parser.add_argument('--log-interval', type=int, default=10, metavar='N', help='report interval')
-parser.add_argument('--save', type=str,  default='stock_predict.pt', help='path to save the final model')
+parser.add_argument('--cuda', default=True, action='store_true', help='use CUDA')
+parser.add_argument('--log_interval', type=int, default=10, metavar='N', help='report interval')
+parser.add_argument('--save', type=str,  default='../model/stock_predict.pt', help='path to save the final model')
 
 args = parser.parse_args()
 
@@ -77,11 +78,10 @@ print('Make data batchfiable...')
 
 
 # define model
-ntokens = len(corpus.dictionary)
 nclass = 2
 
 if not args.pretrained:
-    model = BasicModel()
+    model = BasicModel(args.emb_size, args.na, args.da, args.head, args.head, args.nhid, args.nlayers, args.mlp_hid, args.nclass, args.cuda)
 else:
     model = torch.load(args.pretrained)
     print('Pretrained model loaded.')
@@ -112,7 +112,96 @@ def train(lr, epoch):
         news_data, news_count, stock_date, labels = get_batch(train_news_data, train_news_count, train_stock_data, train_labels, start_idx, args.N, args.batch_size, args.cuda)
         hidden = repackage_hidden(news_hidden)
 
+        output, hidden, news_weights, daily_weights = model(news_data, news_count, args.N, hidden)
+        loss = entropy_loss(output.view(-1, nclass), labels) + args.lamb * (torch.norm(news_weights, 2) + torch.norm(daily_weights, 2))
 
+        optimizer.zero_grad()
+        loss.backward()
+
+        # Gradient clipping in case of explosion
+        torch.nn.utils.clip_grad_norm(model.parameters(), args.clip)
+
+        optimizer.step()
+
+        total_loss += loss.data
+        all_losses.append(loss.data)
+
+        if batch_idx % args.log_interval == 0 and batch_idx > 0:
+            cur_loss = total_loss[0] / args.log_interval
+            elapsed = time.time() - start_time
+            print('| epoch {:3d} | {:5d}/{:5d} batches | lr {:02.4f} | ms/batch {:5.2f} | '
+                  'loss {:5.2f} |'.format(
+                epoch, batch_idx, len(news_data) // args.batch_size, lr,
+                                  elapsed * 1000 / args.log_interval, cur_loss))
+
+            total_loss = 0
+            start_time = time.time()
+
+        return np.mean(all_losses)
+
+def evaluate(news_data, len_li, labels):
+    total_loss = 0
+
+    acc = []
+    pre = []
+    rec = []
+    f1 = []
+
+    hidden = model.init_hidden( args.eval_size )
+
+    for start_idx in range( 0, news_data.size(0) - 1, args.eval_size ):
+        news_data, news_count, stock_date, labels = get_batch(train_news_data, train_news_count, train_stock_data,
+                                                              train_labels, start_idx, args.N, args.batch_size,
+                                                              args.cuda)
+        output, hidden, news_weights, daily_weights = model(news_data, news_count, args.N, hidden)
+        output_flat = output.view(-1, nclass)
+
+        total_loss += news_data.size(0) * (entropy_loss(output_flat, labels).data + args.lamb * (torch.norm(news_weights, 2) + torch.norm(daily_weights, 2)))
+        hidden = repackage_hidden(hidden)
+
+        _, pred = output_flat.topk(1, 1, True, True)
+        pred = pred.t()
+        target = labels.view(1, -1)
+
+        p, r, f, a = compute_measure(pred, target)
+        acc.append( a )
+        pre.append( p )
+        rec.append( r )
+        f1.append( f )
+
+    # Compute Precision, Recall, F1, and Accuracy
+    print('Measure on this dataset')
+    print('Precision:', np.mean(pre))
+    print('Recall:', np.mean(rec))
+    print('F1:', np.mean(f1))
+    print('Acc:', np.mean(acc))
+
+    return total_loss[0] / len(news_data.size(0))
+
+
+# Training Process
+print('Start training...')
+lr = args.lr
+best_val_loss = None
+all_losses = []
+print('# of Epochs:', args.epochs)
+
+for epoch in range(1, args.epochs + 1):
+    epoch_start_time = time.time()
+    all_losses.append(train(lr, epoch)[0])
+    val_loss = evaluate(eval_news_data, eval_news_count, eval_labels)
+    print('-'*80)
+    print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.4f} | '
+          .format(epoch, (time.time() - epoch_start_time), val_loss))
+    print('-'*80)
+
+    # Save the best model and Anneal the learning rate.
+    if not best_val_loss or val_loss < best_val_loss:
+        best_val_loss = val_loss
+        with open(args.save, 'wb') as f:
+            torch.save(model, f)
+    else:
+        lr /= 4.0
 
 
 

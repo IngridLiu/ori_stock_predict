@@ -53,3 +53,27 @@ def repackage_hidden(h):
         return Variable(h.data)
     else:
         return tuple(repackage_hidden(v) for v in h)
+
+
+# Function to compute precision, recall, f1 and accuracy
+def compute_measure(pred, target):
+    pred = pred.view(-1)
+    target = target.view(-1)
+
+    tn, fp, fn, tp = 0, 0, 0, 0
+    for i in range(pred.size(0)):
+        if pred.data[i] == 1 and target.data[i] == 1:
+            tp += 1
+        elif pred.data[i] == 1 and target.data[i] == 0:
+            fp += 1
+        elif pred.data[i] == 0 and target.data[i] == 1:
+            fn += 1
+        else:
+            tn += 1
+
+    pre = tp / float(fp + tp + 1e-8)
+    rec = tp / float(fn + tp + 1e-8)
+    f1 = 2 * pre * rec / (pre + rec + 1e-8)
+    acc = (tn + tp) / float(tn + fp + fn + tp + 1e-8)
+
+    return pre, rec, f1, acc
